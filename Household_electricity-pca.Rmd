@@ -1,0 +1,213 @@
+---
+title: "Exploratory Data Analysis and Principal Component Analysis of Household Electricity Consumption Patterns"
+author: "Mary"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: false
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 4.5)
+```
+
+```{r packages}
+library(tidyverse)
+library(lubridate)
+library(corrplot)
+library(factoextra)
+library(knitr)
+```
+
+# 1. Introduction and problem domain
+
+Electricity use in a home changes with the time of day, the season and the appliances in use. Smart meters now record this use every minute, which gives a large amount of data about how households consume energy. Understanding these patterns helps energy suppliers plan demand and helps households find ways to reduce waste.
+
+This project analyses minute-level electricity measurements from one household. The data has several electrical variables that are related to each other, so it is a good case for exploratory data analysis (EDA) and for Principal Component Analysis (PCA).
+
+# 2. Research motivation and research questions
+
+Household electricity data is large, and many of its variables measure related things. Before building any model, it is useful to check data quality, look at patterns over time and see whether the variables can be summarised with fewer dimensions.
+
+**Main research question:** How do household electricity consumption patterns vary over time, and which electrical measurements contribute most to the variation in household energy consumption?
+
+**Supporting research questions:**
+
+1. How does electricity consumption vary throughout the day and across different months?
+2. Which electrical measurements have the strongest relationships with each other?
+3. Are there unusual electricity consumption patterns or outliers?
+4. Which variables contribute most to the overall variation in electricity consumption?
+5. Can PCA reduce dimensionality while retaining most of the information?
+
+# 3. Dataset description and source
+
+The data is the *Individual Household Electric Power Consumption* dataset from the UCI Machine Learning Repository (Hebrail and Berard, 2012). It contains measurements from one house, recorded every minute between December 2006 and November 2010. The file is read from `data_path` below.
+
+| Variable | Description | Unit |
+|---|---|---|
+| Date | Date of the measurement (dd/mm/yyyy) | date |
+| Time | Time of the measurement (hh:mm:ss) | time |
+| Global_active_power | Household global minute-averaged active power | kilowatts |
+| Global_reactive_power | Household global minute-averaged reactive power | kilowatts |
+| Voltage | Minute-averaged voltage | volts |
+| Global_intensity | Household global minute-averaged current intensity | amperes |
+| Sub_metering_1 | Kitchen (dishwasher, oven, microwave) | watt-hours |
+| Sub_metering_2 | Laundry room (washing machine, tumble-dryer, refrigerator, lighting) | watt-hours |
+| Sub_metering_3 | Electric water heater and air conditioner | watt-hours |
+
+The file uses semicolons as separators and writes missing numeric values as `?`. The data represents a single household, so the results describe this home and not households in general.
+
+```{r read-data}
+# Location of the data file
+data_path <- "household_power_consumption.txt"
+
+# Read the file, treat "?" as missing and set the column types
+power <- read_delim(
+  data_path,
+  delim = ";",
+  na = "?",
+  col_types = cols(
+    Date = col_character(),
+    Time = col_character(),
+    .default = col_double()
+  )
+)
+```
+
+# 4. Initial dataset exploration
+
+```{r initial-exploration}
+# Dimensions
+dim(power)
+
+# Column names and types
+glimpse(power)
+
+# First rows
+head(power)
+
+# Summary of each variable
+summary(power)
+```
+The dataset has `r format(nrow(power), big.mark = ",")` rows and `r ncol(power)` columns before cleaning.
+
+# 5. Data cleaning and preparation
+
+The Date and Time columns are stored as text, so they are combined and converted to a date-time. Time features are then created for the later analysis.
+
+```{r parse-datetime}
+# Names of the continuous measurement variables
+num_vars <- c("Global_active_power", "Global_reactive_power", "Voltage",
+              "Global_intensity", "Sub_metering_1", "Sub_metering_2",
+              "Sub_metering_3")
+
+# Combine Date and Time into one date-time column
+power <- power %>%
+  mutate(DateTime = dmy_hms(paste(Date, Time)),
+         Date = dmy(Date)) %>%
+  select(-Time)
+
+# Check that all dates were parsed
+sum(is.na(power$DateTime))
+range(power$DateTime)
+```
+
+```{r time-features}
+# Create time features
+power <- power %>%
+  mutate(Hour = hour(DateTime),
+         Weekday = wday(Date, label = TRUE, week_start = 1),
+         Month = month(Date, label = TRUE),
+         Year = year(Date),
+         Day_Type = if_else(Weekday %in% c("Sat", "Sun"), "Weekend", "Weekday"))
+
+# Check the new columns
+power %>% select(DateTime, Hour, Weekday, Month, Year, Day_Type) %>% head()
+```
+
+# 6. Missing value analysis and treatment
+
+```{r missing-count}
+# Missing values in each column
+missing_table <- tibble(
+  Variable = names(power),
+  Missing = colSums(is.na(power)),
+  Percent = round(100 * colSums(is.na(power)) / nrow(power), 2)
+)
+kable(missing_table)
+```
+
+```{r missing-pattern}
+# Number of measurement variables missing in each row
+table(rowSums(is.na(power[, num_vars])))
+```
+
+```{r missing-time}
+# Percentage of missing rows in each month
+missing_by_month <- power %>%
+  mutate(YearMonth = floor_date(DateTime, "month")) %>%
+  group_by(YearMonth) %>%
+  summarise(Missing_Percent = 100 * mean(is.na(Global_active_power)))
+
+ggplot(missing_by_month, aes(x = YearMonth, y = Missing_Percent)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Missing Readings by Month",
+       x = "Month", y = "Missing readings (%)") +
+  theme_minimal()
+```
+
+```{r missing-runs}
+# Length of each run of consecutive missing minutes
+runs <- rle(is.na(power$Global_active_power))
+gap_lengths <- runs$lengths[runs$values]
+
+summary(gap_lengths)
+max(gap_lengths)
+```
+
+
+Filling the missing minutes with the mean or median would create readings that were never recorded, and it would flatten the daily pattern. The treatment is chosen after looking at the table, the pattern table and the gap lengths above.
+
+```{r remove-missing}
+rows_before <- nrow(power)
+
+# Remove rows with missing measurements
+power <- power %>% drop_na(all_of(num_vars))
+
+rows_after <- nrow(power)
+c(Before = rows_before, After = rows_after, Removed = rows_before - rows_after)
+```
+
+
+# 7. Duplicate and data type checks
+
+```{r duplicates}
+# Duplicate rows and duplicate timestamps
+sum(duplicated(power))
+sum(duplicated(power$DateTime))
+
+# Remove duplicate rows if any exist
+if (sum(duplicated(power)) > 0) {
+  power <- distinct(power)
+}
+```
+
+```{r data-types}
+# Data types
+sapply(power, function(x) class(x)[1])
+
+# Minimum values, to look for impossible readings
+sapply(power[, num_vars], min)
+```
+
+```{r time-gaps}
+# Seconds between consecutive readings
+gaps <- as.numeric(diff(power$DateTime), units = "secs")
+table(gaps == 60)
+```
+
+
