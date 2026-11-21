@@ -1,6 +1,6 @@
 ---
 title: "Exploratory Data Analysis and Principal Component Analysis of Household Electricity Consumption Patterns"
-author: "Mary"
+author: "Mary Karanja-2023331"
 date: "`r format(Sys.Date(), '%d %B %Y')`"
 output:
   html_document:
@@ -209,5 +209,445 @@ sapply(power[, num_vars], min)
 gaps <- as.numeric(diff(power$DateTime), units = "secs")
 table(gaps == 60)
 ```
+
+
+# 8. Outlier detection and treatment
+
+```{r outlier-sample}
+# Random sample used for plots that are slow with the full data
+set.seed(123)
+power_sample <- slice_sample(power, n = 50000)
+```
+
+```{r boxplots}
+# Boxplots of each variable
+power_sample %>%
+  select(all_of(num_vars)) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Value") %>%
+  ggplot(aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "lightblue", outlier.size = 0.5) +
+  facet_wrap(~ Variable, scales = "free") +
+  labs(title = "Boxplots of Electrical Measurements (random sample of 50,000 rows)",
+       x = NULL, y = "Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())
+```
+
+```{r iqr-outliers}
+# Count outliers using the 1.5 x IQR rule
+count_outliers <- function(x) {
+  q <- quantile(x, c(0.25, 0.75))
+  iqr <- q[2] - q[1]
+  sum(x < q[1] - 1.5 * iqr | x > q[2] + 1.5 * iqr)
+}
+
+outlier_table <- tibble(
+  Variable = num_vars,
+  Outliers = sapply(power[, num_vars], count_outliers)
+) %>%
+  mutate(Percent = round(100 * Outliers / nrow(power), 2))
+kable(outlier_table)
+```
+
+```{r high-values}
+# Upper percentiles of active power
+quantile(power$Global_active_power, c(0.5, 0.9, 0.99, 0.999, 1))
+```
+
+
+The high readings are likely to come from real appliance use, so removing them would remove the patterns this project is studying. The outliers are therefore kept, and only impossible values would be removed. Section 13 looks at when the high readings happen. Because PCA is sensitive to extreme values, this is also discussed in the limitations.
+
+```{r final-check}
+# Check the cleaned data meets the size requirement
+tibble(Rows = nrow(power),
+       Columns = ncol(power),
+       Meets_Requirement = nrow(power) >= 3000 & length(num_vars) >= 7)
+```
+
+# 9. Exploratory Data Analysis
+
+The plots in this section use the random sample of 50,000 rows to keep the document fast to knit.
+
+```{r histograms}
+# Distribution of each variable
+power_sample %>%
+  select(all_of(num_vars)) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Value") %>%
+  ggplot(aes(x = Value)) +
+  geom_histogram(bins = 40, fill = "steelblue", colour = "white") +
+  facet_wrap(~ Variable, scales = "free") +
+  labs(title = "Distribution of Electrical Measurements",
+       x = "Value", y = "Count") +
+  theme_minimal()
+```
+
+
+# 10. Descriptive statistics
+
+```{r descriptive-stats}
+# Summary statistics for each variable
+power %>%
+  summarise(across(all_of(num_vars),
+                   list(mean = mean, sd = sd, median = median, min = min, max = max))) %>%
+  pivot_longer(everything(),
+               names_to = c("Variable", "Statistic"),
+               names_pattern = "(.*)_(mean|sd|median|min|max)") %>%
+  pivot_wider(names_from = Statistic, values_from = value) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3))) %>%
+  kable()
+```
+
+
+
+# 11. Time-based electricity consumption analysis
+
+## Hour of the day
+
+```{r hourly-pattern}
+# Average active power by hour
+hourly <- power %>%
+  group_by(Hour) %>%
+  summarise(Mean_Power = mean(Global_active_power))
+
+ggplot(hourly, aes(x = Hour, y = Mean_Power)) +
+  geom_line(colour = "steelblue", linewidth = 1) +
+  geom_point(colour = "steelblue") +
+  scale_x_continuous(breaks = 0:23) +
+  labs(title = "Average Global Active Power by Hour of the Day",
+       x = "Hour", y = "Global active power (kW)") +
+  theme_minimal()
+```
+
+```{r hourly-submetering}
+# Average sub-metering by hour
+power %>%
+  group_by(Hour) %>%
+  summarise(across(starts_with("Sub_metering"), mean)) %>%
+  pivot_longer(-Hour, names_to = "Sub_metering", values_to = "Mean_Wh") %>%
+  ggplot(aes(x = Hour, y = Mean_Wh, colour = Sub_metering)) +
+  geom_line(linewidth = 1) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(title = "Average Sub-metering by Hour of the Day",
+       x = "Hour", y = "Energy (watt-hours)", colour = "Sub-meter") +
+  theme_minimal()
+```
+
+## Day of the week
+
+```{r weekday-hour-heatmap}
+# Average active power by weekday and hour
+power %>%
+  group_by(Weekday, Hour) %>%
+  summarise(Mean_Power = mean(Global_active_power), .groups = "drop") %>%
+  ggplot(aes(x = Hour, y = Weekday, fill = Mean_Power)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "darkred") +
+  labs(title = "Average Active Power by Weekday and Hour",
+       x = "Hour", y = "Weekday", fill = "kW") +
+  theme_minimal()
+```
+
+## Month and year
+
+```{r monthly-pattern}
+# Average active power by calendar month
+monthly <- power %>%
+  group_by(Month) %>%
+  summarise(Mean_Power = mean(Global_active_power))
+
+ggplot(monthly, aes(x = Month, y = Mean_Power)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Average Global Active Power by Month",
+       x = "Month", y = "Global active power (kW)") +
+  theme_minimal()
+```
+
+```{r monthly-series}
+# Monthly average over the whole period
+monthly_series <- power %>%
+  mutate(YearMonth = floor_date(DateTime, "month")) %>%
+  group_by(YearMonth) %>%
+  summarise(Mean_Power = mean(Global_active_power))
+
+ggplot(monthly_series, aes(x = YearMonth, y = Mean_Power)) +
+  geom_line(colour = "steelblue", linewidth = 1) +
+  geom_point(colour = "steelblue") +
+  labs(title = "Monthly Average Global Active Power, 2006 to 2010",
+       x = "Month", y = "Global active power (kW)") +
+  theme_minimal()
+```
+
+# 12. Correlation and covariation analysis
+
+```{r correlation-matrix}
+# Correlation matrix of the measurement variables
+cor_matrix <- cor(power[, num_vars])
+round(cor_matrix, 2)
+```
+
+```{r correlation-plot}
+corrplot(cor_matrix, method = "color", type = "upper",
+         addCoef.col = "black", number.cex = 0.7,
+         tl.col = "black", tl.cex = 0.8,
+         title = "Correlation Matrix", mar = c(0, 0, 2, 0))
+```
+
+```{r correlation-pairs}
+# Variable pairs ranked by strength of correlation
+cor_pairs <- as.data.frame(as.table(cor_matrix)) %>%
+  filter(as.character(Var1) < as.character(Var2)) %>%
+  mutate(Correlation = round(Freq, 3)) %>%
+  select(Var1, Var2, Correlation) %>%
+  arrange(desc(abs(Correlation)))
+kable(cor_pairs)
+```
+
+```{r scatterplots}
+# Scatterplots of selected pairs
+ggplot(power_sample, aes(x = Global_intensity, y = Global_active_power)) +
+  geom_point(alpha = 0.2, colour = "steelblue") +
+  labs(title = "Global Intensity and Global Active Power",
+       x = "Global intensity (A)", y = "Global active power (kW)") +
+  theme_minimal()
+
+ggplot(power_sample, aes(x = Voltage, y = Global_active_power)) +
+  geom_point(alpha = 0.2, colour = "steelblue") +
+  labs(title = "Voltage and Global Active Power",
+       x = "Voltage (V)", y = "Global active power (kW)") +
+  theme_minimal()
+
+ggplot(power_sample, aes(x = Sub_metering_3, y = Global_active_power)) +
+  geom_point(alpha = 0.2, colour = "steelblue") +
+  labs(title = "Sub-metering 3 and Global Active Power",
+       x = "Sub-metering 3 (Wh)", y = "Global active power (kW)") +
+  theme_minimal()
+```
+
+
+# 13. Unusual pattern identification
+
+## When high readings happen
+
+```{r high-by-hour}
+# Upper fence for active power using the IQR rule
+q <- quantile(power$Global_active_power, c(0.25, 0.75))
+upper_fence <- q[2] + 1.5 * (q[2] - q[1])
+upper_fence
+
+# Share of readings above the fence in each hour
+power %>%
+  mutate(High = Global_active_power > upper_fence) %>%
+  group_by(Hour) %>%
+  summarise(Percent_High = 100 * mean(High)) %>%
+  ggplot(aes(x = Hour, y = Percent_High)) +
+  geom_col(fill = "darkorange") +
+  scale_x_continuous(breaks = 0:23) +
+  labs(title = "Readings Above the Upper Fence by Hour",
+       x = "Hour", y = "Share of readings (%)") +
+  theme_minimal()
+```
+
+## Unusual days
+
+```{r daily-pattern}
+# Daily average active power, using days with most of their readings
+daily <- power %>%
+  group_by(Date) %>%
+  summarise(Mean_Power = mean(Global_active_power),
+            Minutes = n()) %>%
+  filter(Minutes >= 1200)
+
+dq <- quantile(daily$Mean_Power, c(0.25, 0.75))
+d_low <- dq[1] - 1.5 * (dq[2] - dq[1])
+d_high <- dq[2] + 1.5 * (dq[2] - dq[1])
+
+daily <- daily %>%
+  mutate(Unusual = Mean_Power < d_low | Mean_Power > d_high)
+
+ggplot(daily, aes(x = Date, y = Mean_Power)) +
+  geom_line(colour = "grey60") +
+  geom_point(data = filter(daily, Unusual), colour = "red", size = 1.5) +
+  labs(title = "Daily Average Active Power (unusual days in red)",
+       x = "Date", y = "Global active power (kW)") +
+  theme_minimal()
+```
+
+```{r unusual-days-table}
+# Days with the lowest and highest average power
+daily %>% arrange(Mean_Power) %>% head(5) %>% kable(caption = "Lowest days")
+daily %>% arrange(desc(Mean_Power)) %>% head(5) %>% kable(caption = "Highest days")
+```
+
+
+# 14. Categorical variable creation and one-hot encoding
+
+A time period variable is created from the hour of the day, and then one-hot encoded.
+
+```{r time-period}
+# Create the time period variable
+power <- power %>%
+  mutate(Time_Period = case_when(
+    Hour >= 6  & Hour <= 11 ~ "Morning",
+    Hour >= 12 & Hour <= 17 ~ "Afternoon",
+    Hour >= 18 & Hour <= 21 ~ "Evening",
+    TRUE ~ "Night"
+  ),
+  Time_Period = factor(Time_Period,
+                       levels = c("Morning", "Afternoon", "Evening", "Night")))
+
+table(power$Time_Period)
+```
+
+```{r one-hot}
+# One-hot encoding of Time_Period
+power <- power %>%
+  mutate(Period_Morning   = as.integer(Time_Period == "Morning"),
+         Period_Afternoon = as.integer(Time_Period == "Afternoon"),
+         Period_Evening   = as.integer(Time_Period == "Evening"),
+         Period_Night     = as.integer(Time_Period == "Night"))
+
+# Check the encoding
+power %>%
+  select(Hour, Time_Period, starts_with("Period_")) %>%
+  slice(c(1, 400, 800, 1200)) %>%
+  kable()
+
+# Each row should have exactly one 1
+table(rowSums(power[, c("Period_Morning", "Period_Afternoon",
+                        "Period_Evening", "Period_Night")]))
+```
+
+```{r period-consumption}
+# Average consumption in each time period
+power %>%
+  group_by(Time_Period) %>%
+  summarise(Mean_Power = mean(Global_active_power),
+            Median_Power = median(Global_active_power)) %>%
+  kable(digits = 3)
+```
+
+The encoded columns are not used in the PCA. The PCA uses only the continuous electrical measurements, and the time period is used afterwards to help read the results.
+
+# 15. Data standardisation
+
+The variables are measured in different units (kilowatts, volts, amperes and watt-hours) and have very different ranges. PCA looks for the directions with the most variance, so a variable with a large scale such as Voltage would dominate if the data were not standardised. Standardising each variable to a mean of 0 and a standard deviation of 1 gives them equal weight.
+
+```{r standardise}
+# Standard deviations before standardising
+sapply(power[, num_vars], sd)
+
+# Standardise the measurement variables
+power_scaled <- scale(as.matrix(power[, num_vars]))
+
+# Check the result
+round(colMeans(power_scaled), 4)
+apply(power_scaled, 2, sd)
+```
+
+# 16. Principal Component Analysis
+
+PCA creates new variables (principal components) that are combinations of the original variables. The first component captures the most variation, the second captures the most of what remains, and so on. All seven continuous variables are used.
+
+```{r pca}
+# Run PCA on the standardised data
+pca <- prcomp(power_scaled)
+
+summary(pca)
+```
+
+# 17. PCA variance analysis and scree plot
+
+```{r variance-table}
+# Eigenvalues and variance explained
+eig <- get_eigenvalue(pca)
+kable(round(eig, 3),
+      col.names = c("Eigenvalue", "Variance (%)", "Cumulative variance (%)"))
+```
+
+```{r scree-plot}
+# Scree plot
+fviz_eig(pca, addlabels = TRUE, ncp = 7,
+         barfill = "steelblue", barcolor = "steelblue",
+         main = "Scree Plot", xlab = "Principal component",
+         ylab = "Variance explained (%)")
+```
+
+```{r cumulative-plot}
+# Cumulative variance plot
+cum_var <- tibble(PC = 1:nrow(eig),
+                  Cumulative = eig$cumulative.variance.percent)
+
+ggplot(cum_var, aes(x = PC, y = Cumulative)) +
+  geom_line(colour = "steelblue", linewidth = 1) +
+  geom_point(colour = "steelblue", size = 2) +
+  geom_hline(yintercept = c(80, 90), linetype = "dashed", colour = "red") +
+  scale_x_continuous(breaks = 1:nrow(eig)) +
+  labs(title = "Cumulative Variance Explained",
+       x = "Number of components", y = "Cumulative variance (%)") +
+  theme_minimal()
+```
+
+```{r components-needed}
+# Components needed for 80% and 90% of the variance
+n_80 <- which(eig$cumulative.variance.percent >= 80)[1]
+n_90 <- which(eig$cumulative.variance.percent >= 90)[1]
+
+# Components with an eigenvalue above 1
+n_kaiser <- sum(eig$eigenvalue > 1)
+```
+
+The first component explains `r round(eig$variance.percent[1], 1)`% of the variance. `r n_80` components are needed to pass 80% of the variance and `r n_90` components to pass 90%. `r n_kaiser` components have an eigenvalue above 1.
+
+
+# 18. PCA visualisations and variable loadings
+
+```{r loadings}
+# Loadings of the first three components
+kable(round(pca$rotation[, 1:3], 3))
+```
+
+```{r variable-plot}
+# Variable plot for the first two components
+fviz_pca_var(pca, col.var = "contrib",
+             gradient.cols = c("blue", "orange", "red"),
+             repel = TRUE,
+             title = "PCA Variable Plot")
+```
+
+```{r contributions}
+# Contribution of each variable to PC1 and PC2
+fviz_contrib(pca, choice = "var", axes = 1, fill = "steelblue",
+             color = "steelblue", title = "Variable Contributions to PC1")
+fviz_contrib(pca, choice = "var", axes = 2, fill = "steelblue",
+             color = "steelblue", title = "Variable Contributions to PC2")
+```
+
+```{r pca-scores}
+# PC scores for a random sample of observations, coloured by time period
+set.seed(123)
+sample_rows <- sample(nrow(power), 5000)
+
+scores <- data.frame(PC1 = pca$x[sample_rows, 1],
+                     PC2 = pca$x[sample_rows, 2],
+                     Time_Period = power$Time_Period[sample_rows])
+
+ggplot(scores, aes(x = PC1, y = PC2, colour = Time_Period)) +
+  geom_point(alpha = 0.4) +
+  labs(title = "Observations on the First Two Principal Components (sample of 5,000)",
+       x = "PC1", y = "PC2", colour = "Time period") +
+  theme_minimal()
+```
+
+```{r scores-by-period}
+# Average PC1 and PC2 score in each time period
+tibble(Time_Period = power$Time_Period,
+       PC1 = pca$x[, 1],
+       PC2 = pca$x[, 2]) %>%
+  group_by(Time_Period) %>%
+  summarise(Mean_PC1 = mean(PC1), Mean_PC2 = mean(PC2)) %>%
+  kable(digits = 3)
+```
+
+
 
 
