@@ -649,5 +649,49 @@ tibble(Time_Period = power$Time_Period,
 ```
 
 
+# 19. Discussion and interpretation
+
+Question 1 + Main question - Variation over time: Consumption is associated with domestic patterns. The morning peak is observed at 07:00 (1.5 kW) and the evening peak at 20:00 (1.9 kW), while night time consumption is low between 03:00 and 05:00 (0.45 kW). Weekdays show a morning peak and reduced daytime consumption later on. On weekends there is higher daytime consumption which corresponds to time people are at home. 
+
+Question 2 - Correlations: Active power and intensity are strongly correlated (r = 0.99). This is expected as power and intensity are directly proportional at a constant voltage. Sub_metering_3 is also highly correlated with total power amongst the sub meters (0.64). Voltage and load are negatively correlated (-0.41). The sub meters are only weakly correlated with each other (0.05 - 0.10). This is likely due to different appliances being used at different times.
+
+Question 3 - Anomalies: There are many outliers in the sub meters and in active power (4.63%). However these are all actual appliance events and the maximum active power recorded is 11.12 kW, and these have been retained. Days with very high consumption are more common in the winter. December 2006 to March 2007 show many of these days. The days with lowest consumption occur in August 2008, which may suggest low consumption period even though it is not captured by data.
+
+Question 4 - Contribution to variation: Active power and intensity are the main contributors to PC1 with a combined contribution of approximately 58%, and from Sub_metering_3 as well. Sub_metering_2 and reactive power make a contribution to PC2. Active power and intensity are nearly identical and so they contribute redundant information which causes PC1 to appear more important than if either was used alone.
+
+Question 5 - Dimensionality reduction: 85.7% of the variation is captured by four components, therefore it is possible to reduce the number of variables from seven to five as they are the only ones needed to reach 90%. PC7 makes a minimal contribution (0.01%) and this is likely due to the strong relationship between active power and intensity.
 
 
+# 20. Conclusion
+Consumption follows a clear daily rhythm and is higher in winter. Power and intensity carry almost identical information. PC1–PC4 hold 85.7% of the variance, so four components keep most of the information.
+Active power and intensity matter most for PC1, while reactive power and Sub_metering_2 are for PC2.
+
+# 21. Limitations
+
+- The data comes from one household, so the patterns cannot be applied to all households.
+- The data covers about four years, so long-term trends and unusual years are hard to separate.
+- Rows with missing values were removed, which leaves gaps in the time series.
+- Minute-level readings that are close in time are not independent, so statistical tests that assume independence would not be appropriate.
+- The sub-meters do not cover all appliances in the house, so part of the consumption is not measured by them.
+- Global active power, global intensity and voltage are linked through the physics of electricity, so some variables carry overlapping information.
+- PCA only finds linear patterns, and it is sensitive to extreme values, which were kept in the data.
+- The time periods used for the categorical variable are a simple choice and other cut-offs could give different results.
+
+
+# 22. Harvard-style references
+
+Grolemund, G. and Wickham, H. (2011) 'Dates and times made easy with lubridate', *Journal of Statistical Software*, 40(3), pp. 1-25. doi:10.18637/jss.v040.i03.
+
+Hebrail, G. and Berard, A. (2012) *Individual household electric power consumption*. UCI Machine Learning Repository. Available at: https://doi.org/10.24432/C58K54 (Accessed: 18 November 2026).
+
+Jolliffe, I.T. and Cadima, J. (2016) 'Principal component analysis: a review and recent developments', *Philosophical Transactions of the Royal Society A*, 374(2065), 20150202. doi:10.1098/rsta.2015.0202.
+
+Kassambara, A. and Mundt, F. (2020) *factoextra: Extract and visualize the results of multivariate data analyses*. R package. Available at: https://CRAN.R-project.org/package=factoextra (Accessed: 18 November 2026).
+
+R Core Team (2024) *R: A language and environment for statistical computing*. Vienna: R Foundation for Statistical Computing. Available at: https://www.R-project.org/ (Accessed: 18 November 2026).
+
+Wei, T. and Simko, V. (2021) *R package 'corrplot': Visualization of a correlation matrix*. Available at: https://github.com/taiyun/corrplot (Accessed: 18 November 2026).
+
+Wickham, H. et al. (2019) 'Welcome to the tidyverse', *Journal of Open Source Software*, 4(43), p. 1686. doi:10.21105/joss.01686.
+
+Xie, Y., Allaire, J.J. and Grolemund, G. (2018) *R Markdown: The definitive guide*. Boca Raton: Chapman and Hall/CRC.
